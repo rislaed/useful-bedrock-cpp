@@ -6,16 +6,28 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class UsefulBedrockCpp {
-	private static final int USEFUL_PRIVATE_INSTRUCTION_SIZE = 384 * 1024;
+	private static final int USEFUL_PRIVATE_INSTRUCTION_SIZE = 384;
 	private static final String[] IGNORED_NAMESPACES = new String[] {
-		"acme", "asio", "bond_lite", "boost", "cll", "cohtml", "csl", "entt", "gsl", "moodycamel", "msl",
-		"nonstd", "pplx", "rapidjson", "reflection", "renoir", "ska", "std", "type_id", "web", "websocketpp",
-		"wspp_websocket_impl", "xbox", "Concurrency", "Microsoft", "PlayFab", "RakNet", "SharedPtr", "Xal"
+		// unknown code, (non)std
+		"__sub__", "__thunks__", "nonstd", "std", "gsl",
+		// internal rendering systems
+		"cohtml", "renoir", "cg", "msdfgen", "hbui",
+		// networking
+		"boost", "asio", "pplx", "websocketpp", "wspp_websocket_impl", "web",
+		// tememetry, microsoft, monetization
+		"xbox", "Xal", "Microsoft", "PlayFab", "Social", "Realms", "RealmsAPI", "cll",
+		// utils, cryptography, drm
+		"JsonUtil", "rapidjson", "moodycamel", "google_breakpad", "SFAT", "csl", "ska"
+	};
+	private static final String[] SPLIT_NAMESPACES = new String[] {
+		"std", "JsonUtil", "cohtml", "entt"
 	};
 	private static final Pattern VALID_NAMESPACE_MATCHER = Pattern.compile("[a-zA-Z0-9_]+");
 
@@ -86,39 +98,49 @@ public class UsefulBedrockCpp {
 		return builder.toString();
 	}
 
-	private static boolean isUsefulInstruction(String code) throws IOException {
+	private enum InstructionType { 
+		USEFUL, THUNK, JUNK 
+	}
+
+	private static InstructionType classifyInstruction(String code) throws IOException {
 		BufferedReader reader = new BufferedReader(new StringReader(code));
 
 		String address = reader.readLine();
 		if (!address.startsWith("//----- (")
 				|| !address.endsWith(") --------------------------------------------------------")) {
 			if (address.charAt(0) == '/' || address.charAt(0) == '#') {
-				return false;
+				return InstructionType.JUNK;
 			}
-			throw new IllegalStateException("isUsefulInstruction: Unexpected address format -> " + address);
+			throw new IllegalStateException("classifyInstruction: Unexpected address format -> " + address);
 		}
 
 		String line;
+		boolean isThunk = false;
 		while ((line = reader.readLine()) != null) {
 			if (line.length() != 0 && line.charAt(0) != '/' && line.charAt(0) != '#') {
 				break;
 			}
 			if ("// attributes: thunk".equals(line)) {
-				return false;
+				isThunk = true;
 			}
 		}
 
 		if (line != null) {
-			if (line.contains("virtual thunk to") || line.contains("__fastcall operator")) {
-				return false;
+			if (isThunk || line.contains("virtual thunk to") || line.contains("__fastcall operator")) {
+				return InstructionType.THUNK;
 			}
 			if (line.contains(" sub_") || line.contains("*sub_")) {
-				return !("void **sub_".equals(line.substring(0, 11)))
-						&& code.length() >= USEFUL_PRIVATE_INSTRUCTION_SIZE;
+				boolean isVoidPtr = "void **sub_".equals(line.substring(0, Math.min(11, line.length())));
+				boolean isTooSmall = code.length() < USEFUL_PRIVATE_INSTRUCTION_SIZE;
+				
+				if (isVoidPtr || isTooSmall) {
+					return InstructionType.THUNK;
+				}
+				return InstructionType.USEFUL;
 			}
 		}
 
-		return line != null;
+		return isThunk ? InstructionType.THUNK : (line != null ? InstructionType.USEFUL : InstructionType.JUNK);
 	}
 
 	private static class InstructionData {
@@ -130,7 +152,7 @@ public class UsefulBedrockCpp {
 			this.source = source;
 		}
 
-		public static InstructionData of(String source) throws IOException {
+		public static InstructionData of(String source, boolean ignoreNamespaces) throws IOException {
 			BufferedReader reader = new BufferedReader(new StringReader(source));
 
 			String line;
@@ -162,7 +184,7 @@ public class UsefulBedrockCpp {
 						continue;
 					}
 					// probably useful for analysis, but for now we can actually skip it
-					if (buffer.length() == 0 && (symbol == '*' && symbol == '&')) {
+					if (buffer.length() == 0 && (symbol == '*' || symbol == '&')) {
 						continue;
 					}
 					if (symbol == ':') {
@@ -232,52 +254,63 @@ public class UsefulBedrockCpp {
 				throw new IllegalStateException(
 						"parseInstructionData: Invalid namespace definition -> " + definition + " (line " + line + ")");
 			}
+
 			String namespace = namespaceRegex.group();
-			if (Arrays.stream(IGNORED_NAMESPACES).anyMatch(namespace::equals)) {
+			if (!namespaced) {
+				namespace = namespace.startsWith("Java_") ? "__jni__" : "__sub__";
+			}
+			if (ignoreNamespaces && IGNORED_NAMESPACES.length != 0 && Arrays.stream(IGNORED_NAMESPACES).anyMatch(namespace::equals)) {
 				return null;
 			}
-			if (!namespaced) {
-				namespace = namespace.startsWith("Java_") ? "__jni__" : "__main__";
+			if (SPLIT_NAMESPACES.length != 0 && Arrays.stream(SPLIT_NAMESPACES).anyMatch(namespace::equals)) {
+				Matcher subMatcher = Pattern.compile(namespace + "::([a-zA-Z0-9_]+)").matcher(definition);
+				if (subMatcher.find()) {
+					namespace = namespace + "_" + subMatcher.group(1);
+				}
 			}
 
 			return new InstructionData(source, namespace);
 		}
 	}
 
-	private static void rewriteInstructionChunk(BufferedReader reader, String outputFolder) throws IOException {
+	private static void rewriteInstructionChunk(BufferedReader reader, String outputFolder, boolean ignoreNamespaces) throws IOException {
 		long beginning = System.currentTimeMillis();
 		long instructions = 0l;
 		long rewritten = 0l;
 
+		boolean ignoreThunks = ignoreNamespaces && Arrays.stream(IGNORED_NAMESPACES).anyMatch("__thunks__"::equals);
 		while (reader.ready()) {
 			String instruction = nextInstruction(reader);
-			if (isUsefulInstruction(instruction)) {
-				InstructionData data = InstructionData.of(instruction);
+			InstructionType type = classifyInstruction(instruction);
+
+			if (type == InstructionType.USEFUL) {
+				InstructionData data = InstructionData.of(instruction, ignoreNamespaces);
 				if (data != null) {
 					File outputSource = new File(outputFolder, data.namespace + ".c");
-
 					boolean alreadyExists = outputSource.exists();
 					if (!alreadyExists) {
-						try {
-							outputSource.createNewFile();
-						} catch (IOException e) {
-							throw new RuntimeException("Cannot create " + data.namespace + " namespace file!");
-						}
+						outputSource.createNewFile();
 					}
 
 					FileWriter writer = new FileWriter(outputSource, Charset.forName("UTF-8"), true);
-					if (alreadyExists) {
-						writer.write('\n');
-					}
+					if (alreadyExists) writer.write('\n');
 					writer.write(data.source);
-
-					try {
-						writer.close();
-					} catch (IOException e) {
-					}
-
+					writer.close();
 					rewritten++;
 				}
+			} else if (type == InstructionType.THUNK && !ignoreThunks) {
+				File thunksFile = new File(outputFolder, "__thunks__.c");
+				boolean alreadyExists = thunksFile.exists();
+				if (!alreadyExists) {
+					thunksFile.createNewFile();
+				}
+
+				FileWriter writer = new FileWriter(thunksFile, Charset.forName("UTF-8"), true);
+				if (alreadyExists) writer.write('\n');
+				writer.write(instruction);
+				writer.close();
+
+				rewritten++; 
 			}
 			instructions++;
 		}
@@ -295,7 +328,7 @@ public class UsefulBedrockCpp {
 		file.delete();
 	}
 
-	public static void makeCppUseful(String inputSource, String outputFolder) throws IOException {
+	public static void makeCppUseful(String inputSource, String outputFolder, boolean ignoreNamespaces) throws IOException {
 		File inputFile = new File(inputSource);
 		File outputFile = new File(outputFolder);
 		if (outputFile.exists()) {
@@ -309,7 +342,7 @@ public class UsefulBedrockCpp {
 
 		BufferedReader reader = new BufferedReader(new FileReader(inputSource, Charset.forName("UTF-8")));
 		skipDeclarationChunk(reader);
-		rewriteInstructionChunk(reader, outputFolder);
+		rewriteInstructionChunk(reader, outputFolder, ignoreNamespaces);
 		try {
 			reader.close();
 		} catch (IOException e) {
@@ -327,16 +360,18 @@ public class UsefulBedrockCpp {
 
 	private static void flushDirectoryListing(String path) throws IOException {
 		File outputData = new File(path);
-		File outputListing = new File(path, "__index__.txt");
+		File outputListing = new File(path, "__index__");
 		if (outputListing.exists()) {
 			deleteRecursive(outputListing);
 		}
+		File[] files = outputData.listFiles();
 		outputListing.createNewFile();
 
 		FileWriter writer = new FileWriter(outputListing);
-		for (File children : outputData.listFiles()) {
-			if (children.isFile()) {
-				writer.write(children.getName());
+		for (File children : files) {
+			String name = children.getName();
+			if (name.endsWith(".c") && children.isFile()) {
+				writer.write(name.substring(0, name.length() - 2));
 				writer.write('\n');
 			}
 		}
@@ -347,10 +382,30 @@ public class UsefulBedrockCpp {
 	}
 
 	public static void main(String[] args) {
+		List<String> arguments = new ArrayList<>();
+		String libraryName = null;
+		for (String argument : args) {
+			if (argument.startsWith("--")) {
+				arguments.add(argument);
+				continue;
+			}
+			if (libraryName != null) {
+				throw new IllegalArgumentException("Library name was already providen (" + libraryName + "): " + argument + "!");
+			}
+			libraryName = argument;
+		}
+		if (libraryName == null || libraryName.length() == 0) {
+			libraryName = "minecraftpe";
+		}
+
+		String outputDirectory = Path.of(libraryName).toString();
 		try {
-			makeCppUseful(Path.of("libminecraftpe.so.c").toString(), Path.of("minecraftpe").toString());
-			if (args.length > 0 && args[0] == "--listing") {
-				flushDirectoryListing(Path.of("minecraftpe").toString());
+			boolean ignoreNamespaces = !arguments.contains("--full");
+			if (!arguments.contains("--listing-only")) {
+				makeCppUseful(Path.of("lib" + libraryName + ".so.c").toString(), outputDirectory, ignoreNamespaces);
+			}
+			if (arguments.contains("--listing") || arguments.contains("--listing-only")) {
+				flushDirectoryListing(outputDirectory);
 			}
 		} catch (IOException e) {
 			throw new RuntimeException(e);

@@ -1,3 +1,3 @@
-minecraftpe/
-libminecraftpe/
-libminecraftpe*
+libmcpe*.idb
+libmcpe*.i64
+libmcpe*.c
