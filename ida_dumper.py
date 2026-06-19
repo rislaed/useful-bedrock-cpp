@@ -38,8 +38,7 @@ def remove_checkpoint(file):
 def format_time(seconds):
 	m, s = divmod(int(seconds), 60)
 	h, m = divmod(m, 60)
-	d, h = divmod(h, 24)
-	return f"{d}d {h:2d}h {m:2d}m {s:2d}s"
+	return f"{h:2d}h {m:2d}m {s:2d}s"
 
 def main():
 	idaapi.auto_wait()
