@@ -4,5 +4,7 @@
 		"libmcpe*.idb": true,
 		"libmcpe*.i64": true,
 		"libmcpe*.c": true
-	}
+	},
+	"C_Cpp.errorSquiggles": "disabled",
+	"workbench.editorLargeFileConfirmation": 384
 }
