@@ -1,0 +1,8 @@
+{
+	"search.useIgnoreFiles": false,
+	"search.exclude": {
+		"libmcpe*.idb": true,
+		"libmcpe*.i64": true,
+		"libmcpe*.c": true
+	}
+}
