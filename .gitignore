@@ -1,14 +1,5 @@
-libmcpe*.idb
-libmcpe*.i64
-libmcpe*.c
-libmcpe*.txt
-
-mcpe16-arm32/
-mcpe16-arm32-*
-mcpe16-arm64/
-mcpe16-arm64-*
-mcpe19/
-mcpe19-*
+libmcpe*
+mcpe*/
 
 modules/
 symbols/
