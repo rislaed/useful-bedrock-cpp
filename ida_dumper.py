@@ -1,46 +1,59 @@
 import idaapi, idautils, ida_funcs, ida_hexrays, ida_lines, ida_ida, ida_nalt, ida_kernwin
 import os
 import time
+import gc
 
-
-def resolve_checkpoint(file):
-	if not os.path.exists(file):
+def resolve_checkpoint(output_name, funcs):
+	if not os.path.exists(output_name):
 		return 0
 
-	with open(file, "r") as f:
-		content = f.read().strip()
+	with open(output_name, "rb") as f:
+		f.seek(max(0, os.path.getsize(output_name) - 10000))
+		data = f.read()
 
-	if not content:
-		raise ValueError("Checkpoint file exists, but could not be empty!")
-	if content.isdigit():
-		return int(content)
+	idx = data.rfind(b"//-----")
+	if idx != -1:
+		offset = os.path.getsize(output_name) - len(data) + idx
+		line_end = data.find(b"\n", idx)
+		header = data[idx:line_end].decode("utf-8", errors="ignore")
 
-	try:
-		addr = int(content, 16)
+		try:
+			addr_str = header.split("(")[1].split(")")[0]
+			addr = int(addr_str, 16)
+		except (IndexError, ValueError):
+			if ida_kernwin.ask_yn(1, f"Failed to parse address from header:\n{header}\nOverwrite and start from beginning?") != 1:
+				return -1
+			return 0
+
 		func = ida_funcs.get_func(addr)
 		if func:
-			print(f"Checkpoint {hex(addr)} resolved, address starts at {hex(func.start_ea)}.")
-			funcs = list(idautils.Functions())
-			return funcs.index(func.start_ea)
-		else:
-			raise ValueError(f"Checkpoint {content!r} could not be resolved from address!")
-	except ValueError:
-		raise ValueError(f"Checkpoint {content!r} is invalid number!")
+			try:
+				start_idx = funcs.index(func.start_ea)
+				with open(output_name, "r+b") as f2:
+					f2.truncate(offset)
+				print(f"Checkpoint 0x{addr:X} resolved, resuming from index {start_idx}.")
+				return start_idx
+			except ValueError:
+				pass
 
-def save_checkpoint(file, index):
-	with open(file, "w") as f:
-		f.write(str(index))
-
-def remove_checkpoint(file):
-	if os.path.exists(file):
-		os.remove(file)
+		if ida_kernwin.ask_yn(1, f"Checkpoint address 0x{addr:X} not found in IDA database.\nOverwrite and start from beginning?") != 1:
+			return -1
+		return 0
+	else:
+		if ida_kernwin.ask_yn(1, "Output file exists but no checkpoint marker found.\nOverwrite and start from beginning?") != 1:
+			return -1
+		return 0
 
 def format_time(seconds):
 	m, s = divmod(int(seconds), 60)
 	h, m = divmod(m, 60)
+	if h == 0:
+		if m == 0:
+			return f"{s:2d}s"
+		return f"{m:2d}m {s:2d}s"
 	return f"{h:2d}h {m:2d}m {s:2d}s"
 
-def main():
+def request_decompile():
 	idaapi.auto_wait()
 	pad = 16 if ida_ida.inf_get_app_bitness() == 64 else 8
 	input_name = ida_nalt.get_root_filename()
@@ -52,18 +65,26 @@ def main():
 	if not output_name:
 		print("Decompilation cancelled.")
 		return
-	output_checkpoint = output_name + ".index"
-
-	start_idx = resolve_checkpoint(output_checkpoint)
+		
 	funcs = list(idautils.Functions())
 	total_funcs = len(funcs)
+
+	start_idx = resolve_checkpoint(output_name, funcs)
+	if start_idx == -1:
+		print("Decompilation cancelled.")
+		return
+
 	start_time = time.time()
+	last_time = start_time
+	last_idx = start_idx
+	avg_rate = None
+	is_first_chunk = start_idx != 0
 
 	print(f"Starting decompilation of {input_name} to {output_name}...")
 	print(f"Total functions to process: {start_idx}/{total_funcs}")
 
 	write_mode = "a" if start_idx > 0 else "w"
-	with open(output_name, write_mode, encoding="utf-8", buffering=1024 * 1024) as f:
+	with open(output_name, write_mode, encoding="utf-8", buffering=1024 * 1024 * 16) as f:
 		if start_idx == 0:
 			f.write("/*\n")
 			f.write(" * ============================================================================\n")
@@ -88,13 +109,17 @@ def main():
 			f.write(" * SOFTWARE.\n")
 			f.write(" * ============================================================================\n")
 			f.write(" */\n\n")
-
 			f.write("// Function declarations\n\n")
 			f.write("// Data declarations\n\n\n")
 
 		successful = start_idx
 		for i in range(start_idx, total_funcs):
+			if ida_kernwin.user_cancelled():
+				print(f"Decompilation interrupted by user on address 0x{funcs[i]:X}.")
+				break
+
 			ea = funcs[i]
+			cfunc = None
 			try:
 				cfunc = ida_hexrays.decompile(ea)
 				if cfunc:
@@ -105,30 +130,43 @@ def main():
 					successful += 1
 			except Exception:
 				pass
+			finally:
+				del cfunc
+				if (i + 1) % 100 == 0:
+					ida_hexrays.clear_cached_cfuncs()
 
 			if (i + 1) % 1000 == 0 or (i + 1) == total_funcs:
 				current_idx = i + 1
-				if current_idx % 10000 == 0:
-					ida_hexrays.clear_cached_cfuncs()
-
-				save_checkpoint(output_checkpoint, current_idx)
+				gc.collect()
 				f.flush()
 
-				elapsed = time.time() - start_time
-				processed_count = current_idx - start_idx
-				if processed_count > 0:
-					rate = processed_count / elapsed
+				current_time = time.time()
+				elapsed_since_last = current_time - last_time
+				processed_since_last = current_idx - last_idx
+
+				if is_first_chunk:
+					is_first_chunk = False
+					eta_str = ""
+				elif processed_since_last > 0 and elapsed_since_last > 0:
+					current_rate = processed_since_last / elapsed_since_last
+					if avg_rate is None:
+						avg_rate = current_rate
+					else:
+						avg_rate = 0.2 * current_rate + 0.8 * avg_rate
+
 					remaining = total_funcs - current_idx
-					eta_seconds = remaining / rate
+					eta_seconds = remaining / avg_rate
 					eta_str = f"| ETA: {format_time(eta_seconds)} "
 				else:
 					eta_str = ""
 
 				missed = current_idx - successful
-				print(f"[{current_idx}/{total_funcs}] {(current_idx / total_funcs)*100:.1f}% {eta_str}| Missed: {missed}")
+				print(f"[{current_idx}/{total_funcs}] {(current_idx / total_funcs)*100:.1f}% {eta_str}| Chunk: {elapsed_since_last:.1f}s | Missed: {missed}")
 
-	remove_checkpoint(output_checkpoint)
+				last_time = current_time
+				last_idx = current_idx
+
 	print("Decompilation finished!")
 
 if __name__ == "__main__":
-	main()
+	request_decompile()
