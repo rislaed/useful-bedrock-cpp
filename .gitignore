@@ -7,5 +7,7 @@ mcpe16-arm32/
 mcpe16-arm32-*
 mcpe16-arm64/
 mcpe16-arm64-*
+mcpe19/
+mcpe19-*
 
 symbols/

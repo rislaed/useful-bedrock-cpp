@@ -15,19 +15,34 @@ import java.util.regex.Pattern;
 public class UsefulBedrockCpp {
 	private static final int USEFUL_PRIVATE_INSTRUCTION_SIZE = 384;
 	private static final String[] IGNORED_NAMESPACES = new String[] {
-		// unknown code, (non)std
-		"__sub__", "__thunks__", "nonstd", "std", "gsl",
-		// internal rendering systems
-		"cohtml", "renoir", "cg", "msdfgen", "hbui",
-		// networking
-		"boost", "asio", "pplx", "websocketpp", "wspp_websocket_impl", "web",
-		// tememetry, microsoft, monetization
-		"xbox", "Xal", "Microsoft", "PlayFab", "Social", "Realms", "RealmsAPI", "cll",
-		// utils, cryptography, drm
-		"JsonUtil", "rapidjson", "moodycamel", "google_breakpad", "SFAT", "csl", "ska"
+		// private functions, thunk stubs
+		"__sub__", "__thunks__",
+		// 3rd party libraries (core, math, strings, utils)
+		"nonstd", "std", "gsl", "tinystl", "absl", "glm", "csl", "ska", "moodycamel", "SFAT", "sigslot", "utf8", "unibrow", "msl",
+		// 3rd party libraries (serialization, encoding, compression)
+		"cereal", "bond_lite", "rapidjson", "rapidjson_cohtml", "rapidxml_cohtml", "snappy", "qrcodegen", "farmhashte", "farmhashnt", "farmhashsu", "farmhashsa",
+		// networking & http transport
+		"boost", "asio", "pplx", "websocketpp", "wspp_websocket_impl", "okhttp_websocket_impl", "web", "webrtc", "cricket", "rtc", "RakNet", "http_alloc_deleter", "http_header_compare",
+		// ui & rendering backends
+		"cohtml", "renoir", "cg", "msdfgen", "hbui", "bgfx", "bx", "bimg", "rendergraph", "dragon",
+		// scripting engines & wrappers
+		"v8", "v8_inspector", "v8_crdtp", "gametest", "Scripting", "OreUI",
+		// telemetry, microsoft services, monetization
+		"xbox", "Xal", "Microsoft", "PlayFab", "Social", "Realms", "RealmsAPI", "cll", "MinecraftEventing", "storeSearch", "sidebar",
+		// internal debugging, crash logging & misc
+		"google_breakpad", "logger", "SideBySide", "ViewT", "glTFExporter", "glTFExportData"
+	};
+	private static final String[] IGNORED_SPLIT_NAMESPACES = new String[] {
+		"JsonUtil_*",
+		// empty wrappers and type erasure
+		"entt_any_cast", "entt_basic_any", "entt_meta_any", "entt_internal",
+		// sub-namespaces of 3rd party libraries
+		"Cereal*", "farmhash*", "Rak*", "WebRTC*", "WebSocket*", "Webview*",
+		// telemetry & tracking
+		"*Crash*", "*Telemetry*", "*Analytics*", "BedrockLog*"
 	};
 	private static final String[] SPLIT_NAMESPACES = new String[] {
-		"std", "JsonUtil", "cohtml", "entt"
+		"std", "JsonUtil", "entt", "Bedrock",
 	};
 	private static final Pattern VALID_NAMESPACE_MATCHER = Pattern.compile("[a-zA-Z0-9_]+");
 
@@ -222,8 +237,7 @@ public class UsefulBedrockCpp {
 							if (!(overload.endsWith("::operator") || overload.endsWith("::operator<"))) {
 								angleBrackets++;
 							} else {
-								// there must be such cases when operator<< appears in comparison, not bitwise
-								// operation
+								// there must be such cases when operator<< appears in comparison, not bitwise operation
 								// e.g. operator<<Core::StackString<char,1024u>>
 								expectingParentheses = overload.endsWith("::operator<");
 							}
@@ -263,13 +277,26 @@ public class UsefulBedrockCpp {
 				return null;
 			}
 			if (SPLIT_NAMESPACES.length != 0 && Arrays.stream(SPLIT_NAMESPACES).anyMatch(namespace::equals)) {
-				Matcher subMatcher = Pattern.compile(namespace + "::([a-zA-Z0-9_]+)").matcher(definition);
+				Matcher subMatcher = Pattern.compile(namespace + "::([a-zA-Z0-9_]+)(?:<|::)").matcher(definition);
 				if (subMatcher.find()) {
 					namespace = namespace + "_" + subMatcher.group(1);
 				}
 			}
 
-			return new InstructionData(source, namespace);
+			InstructionData data = new InstructionData(source, namespace);
+			if (ignoreNamespaces && IGNORED_SPLIT_NAMESPACES.length != 0 && Arrays.stream(IGNORED_SPLIT_NAMESPACES).anyMatch(ignoredNs -> {
+				if (ignoredNs.startsWith("*") && ignoredNs.endsWith("*")) {
+					return data.namespace.contains(ignoredNs.substring(1, ignoredNs.length() - 1));
+				} else if (ignoredNs.startsWith("*")) {
+					return data.namespace.endsWith(ignoredNs.substring(1));
+				} else if (ignoredNs.endsWith("*")) {
+					return data.namespace.startsWith(ignoredNs.substring(0, ignoredNs.length() - 1));
+				}
+				return data.namespace.equals(ignoredNs);
+			})) {
+				return null;
+			}
+			return data;
 		}
 	}
 
