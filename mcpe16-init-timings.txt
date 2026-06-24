@@ -1,0 +1,117 @@
+MinecraftGame::initImpl
+[   26.37ms/    1] initStep1 (Init Core Services, Feature Toggles)
+[    0.03ms/    1] initializeFrameBuilder (Init Graphics Context If Needed)
+[    0.01ms/    1] initLoadRendererAssets
+[   64.39ms/    1] initUser (Primary User Option Observer, Edu Mode)
+[    0.04ms/    7] initWaitForPrimaryUser
+[    1.57ms/    1] initUserComplete (Resource Loaders, File Managers, Entitlements)
+[    0.14ms/    1] initFileSystemSpaceTracking
+[    1.18ms/  288] waitForFileSystemSpaceTracking (Async Space Checking)
+[    0.00ms/    1] waitForRendererAssets
+[    1.32ms/    1] initLogging (Content Log, Debug Logging, Resource Loaders, Realms Services, Ray Tracing Options)
+                    Options::shouldAppendDebugLogTimestamp() const
+                    Options::isLogCategoryEnabled(BedrockLog::LogCategory) const
+                        WORLD_GEN = 1
+                        LOOT = 2
+                        RENDER = 3
+                        STRUCTURE = 4
+                        UI = 5
+                        ONLINE = 6
+[    0.01ms/    1] initRepopulateLevelInfoCache (Level DB Environment)
+[    0.02ms/    1] initDatabase
+[   50.70ms/    1] initPacks (Resource Packs, Texture Hot Reloader, Schematics Repository, Skin Repository)
+[   11.25ms/40664] initWaitForSkinRepo (If Not Initialized Skip Persona? :>)
+                    SkinRepository::isInitialized() const
+[    5.30ms/    1] initNetworkHandler
+[  102.84ms/    1] initCreatePrimaryClient (Persona Service, Client Instance, Social User Manager)
+[  127.29ms/    1] initHummingbirdUI
+[   49.61ms/    1] initPrimaryClientComplete (Uniforms, Device Render, Routing, Input Handling)
+                    Options::getDevIgnoreUserInput() const
+[ 1261.83ms/    1] initHummingbirdRendering (Shader Groups)
+[    0.01ms/    1] initWaitForFrameBuilder
+[    0.00ms/    1] initWaitForResourceRepository
+                    ResourcePackRepository::isInitialized() const
+[  405.59ms/    1] initHideSplashScreen ("materials/common.json", Screen Renderer)
+[   38.70ms/    1] initAudio (Sound Engine, Music Manager)
+[    0.00ms/    1] waitForAudio
+[    0.11ms/    1] initTTS (Text To Speech System Factory)
+[    0.22ms/    1] initResourceLoader
+[    0.00ms/    1] initWaitForRepopulateLevelInfoCache
+[  248.73ms/    1] initStep2 (Persona Init, Resource Packs Refresh, Level Storage, Offer Repository Init)
+                    PersonaRepository::beginAsyncInit(this + 296)
+                    MinecraftGame::_buildClientStartupStack()
+                    OfferRepository::beginAsyncInit(this + 296)
+[    0.02ms/    1] initWaitForPersonaRepo
+[    0.03ms/    5] initWaitForOfferRepo
+[   39.40ms/    1] initStep2A (Edu Systems)
+[    0.27ms/    1] initMultiplayerMgr (Multiplayer Service Manager)
+[   18.31ms/    1] initEventing (Debugging Mostly)
+[   14.11ms/    1] initStep2B (Durables Eventing, Edu Library)
+[    0.10ms/   12] initWaitForWorldTemplateManager
+[   11.58ms/    1] initStep3 (Content Manager, Store Catalog Repository)
+                    StoreCatalogConfig::fetch(this + 0x97)
+[    0.87ms/  176] initWaitForContentManager
+[  283.08ms/    1] initNotifyOnActiveResourcePacksChanged
+[    0.14ms/    6] initWaitForLocalization
+[    0.01ms/    1] initUILoadAsyncWait
+[    0.01ms/    1] initStep5 (Primary Client Instance Stuff)
+[   28.04ms/ 1281] initWaitForPatchNotes
+[    0.07ms/    1] initWaitForOfferLicense
+[    4.52ms/    1] initPostA (Third Party Server Repository, Client Scene Stack)
+                    ThirdPartyServerRepository::setup(..)
+                    TreatmentPackDownloadMonitor::buildTreatmentStackPack(..)
+[ 7842.75ms/    1] loadGlobalResourcePacks
+[    0.02ms/    1] notifyOnFullVanillaPackOnStack
+[   32.24ms/    1] initPostB (Commands, Actor Definitions)
+                    Minecraft::init()
+[    0.02ms/    1] initPostFontAsync
+[    0.32ms/    1] initDefaultFonts
+                    FontRepository::loadDefaultFonts(..)
+[   14.60ms/ 2111] initWaitForDefaultFontsToLoad
+[    0.06ms/    1] initFontHandles
+[    0.08ms/    1] initFontMetadata
+[    1.11ms/   58] initWaitForFontMetadataToLoad
+[    0.10ms/    1] initUpdateFontsBasedOffOfOverrideEnable
+[    0.02ms/    1] initHummingbirdFonts
+[    9.31ms/    1] initPostC (Emoticons)
+[    7.62ms/  303] initWaitForMainMenuResources
+[    0.02ms/    1] initIssueHardwareCursorLoad
+[   22.81ms/    1] initPushAlwaysActiveScreen
+                    MinecraftGame::_pushAlwaysActiveScreens(..)
+                        SceneFactory::createCubeMapScreen(..)
+                        SceneFactory::createDebugScreen(..)
+                        SceneFactory::createToastScreen(..)
+                        SceneFactory::createHolographicPostRenderScreen(..)
+                        SceneFactory::createHolographicCursorScreen(..)
+[    3.25ms/    1] initPostE (File Archiver)
+                    ExternalServerFile::load()
+[    0.00ms/    1] initTestClientInterface (Empty)
+[   45.22ms/    1] initFinish
+
+MinecraftGame::onAppPreSuspended
+[    0.02ms/    1] PrepForSuspend
+[    0.11ms/    1] NotifyHumingbird
+[    0.01ms/    1] SetSuspendingState
+[    0.00ms/    1] onAppSuspendedStart
+
+MinecraftGame::onAppSuspended
+[    0.01ms/    1] deferTimedStorageActions
+[    0.24ms/    1] SuspendEventing
+[   19.63ms/    1] SuspendAudio
+[    0.13ms/    1] forceSendEvents
+[    0.04ms/    1] SuspendUserManager
+[    1.71ms/    1] SuspendGameRenderer
+[   11.50ms/    1] unloadAllTextures
+[    0.02ms/    1] resetPlayerMovement
+[    0.03ms/    1] clearGraphicsCache
+[    0.00ms/    1] SuspendServer
+[    0.03ms/    1] SuspendResourceLoadManager
+[    0.58ms/    1] SuspendMinecraftGraphics
+[    0.01ms/    1] SuspendGameplayGraphics
+[    0.01ms/    1] waitAsyncSuspendWork
+
+MinecraftGame::onAppResumed
+...
+
+MinecraftGame::_onDeviceLostRecovery
+...

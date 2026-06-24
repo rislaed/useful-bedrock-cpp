@@ -1,0 +1,33 @@
+TrialManager::isFeatureEnabled(MinecraftGameFeatures) const
+	MULTIPLAYER = 0
+	GAMEMODE = 1
+	PACKS = 2
+	SEEDS = 3
+	SERVERS = 4
+	MARKETPLACE = 5
+	XBL = 6
+	TRIAL = 7
+	TIPS = 8
+
+SerialWorkList::queueWorkItem(..)
+
+MinecraftScreenModel::tryNavigateToXblFirstLaunchScreen()
+WorldSettingsScreenController::_shouldShowMultiplayerWarningMessages()
+PlayScreenModel::setPlayScreenDefaultTab()
+	(*(int (__fastcall **)(_DWORD))(**(_DWORD **)(a1 + 16) + 1284))(*(_DWORD *)(a1 + 16))
+Social::PlayFabApi::isPlayFabCommerceEnabled()
+SkinRepository::canUseSkin(..)
+SkinRepository::isSkinPackOwned(..)
+SkinRepository::isSkinPackTrusted(..)
+MinecraftScreenModel::supports3rdPartyServers()
+LoadingScreen::render(..)
+
+ContentCatalogService::searchCatalog(..)
+	MainMenuScreenModel::isAbleToFetch(..)
+		StartMenuScreenController::_fetchUserOrientedContent(..)
+	FlightingService::tryFetch(..)
+	TreatmentPackDownloadMonitor::onNetworkReady(..)
+
+Actor::isDebugging() -> 0
+ScreenView::isDebugRendering()
+ScreenView::isDebuggingFocus()
