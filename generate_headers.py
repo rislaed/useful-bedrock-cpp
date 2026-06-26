@@ -96,7 +96,6 @@ def parse_demangled(demangled, mangled):
 		return 'global', ''
 
 def format_decl(ns_path, demangled, mangled, indent):
-
 	is_secondary = False
 	if re.search(r'(C2|C3|D0|D2)[A-Za-z0-9_]*$', mangled):
 		is_secondary = True
