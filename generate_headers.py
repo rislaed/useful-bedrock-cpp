@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import sys
+from collections import defaultdict
 
 try:
 	import cpp_demangle
@@ -10,24 +11,24 @@ except ImportError:
 	exit(1)
 
 def find_main_paren(s):
-	s_clean = re.sub(r'operator\s*(<=>|<<|>>|<=|>=|->|<|>)', 'operator_HIDDEN', s)
+	s_clean = re.sub(r"operator\s*(<=>|<<|>>|<=|>=|->|<|>)", "operator_HIDDEN", s)
 	depth = 0
 	for i, c in enumerate(s_clean):
-		if c == '<': depth += 1
-		elif c == '>': depth -= 1
-		elif c == '(' and depth == 0: return i
+		if c == "<": depth += 1
+		elif c == ">": depth -= 1
+		elif c == "(" and depth == 0: return i
 	return -1
 
 def split_namespace(s):
 	parts = []
 	depth = 0
 	last_idx = 0
-	s_clean = re.sub(r'operator\s*(<=>|<<|>>|<=|>=|->|<|>)', 'operator_HIDDEN', s)
+	s_clean = re.sub(r"operator\s*(<=>|<<|>>|<=|>=|->|<|>)", "operator_HIDDEN", s)
 	i = 0
 	while i < len(s):
-		if s_clean[i] == '<': depth += 1
-		elif s_clean[i] == '>': depth -= 1
-		elif depth == 0 and s[i] == ':' and i+1 < len(s) and s[i+1] == ':':
+		if s_clean[i] == "<": depth += 1
+		elif s_clean[i] == ">": depth -= 1
+		elif depth == 0 and s[i] == ":" and i+1 < len(s) and s[i+1] == ":":
 			parts.append(s[last_idx:i])
 			last_idx = i + 2
 			i += 1
@@ -38,44 +39,44 @@ def split_namespace(s):
 def strip_return_type(s):
 	depth = 0
 	for i in range(len(s)-1, -1, -1):
-		if s[i] == '>': depth += 1
-		elif s[i] == '<': depth -= 1
-		elif s[i] == ')': depth += 1
-		elif s[i] == '(': depth -= 1
-		elif s[i] == ']': depth += 1
-		elif s[i] == '[': depth -= 1
-		elif s[i] == ' ' and depth == 0:
+		if s[i] == ">": depth += 1
+		elif s[i] == "<": depth -= 1
+		elif s[i] == ")": depth += 1
+		elif s[i] == "(": depth -= 1
+		elif s[i] == "]": depth += 1
+		elif s[i] == "[": depth -= 1
+		elif s[i] == " " and depth == 0:
 			return s[i+1:]
 	return s
 
 def parse_demangled(demangled, mangled):
-	if '_ZZ' in mangled or '_ZGVZ' in mangled:
-		m = re.search(r'^_[A-Za-z]*?N.*?(\d+)', mangled)
+	if "_ZZ" in mangled or "_ZGVZ" in mangled:
+		m = re.search(r"^_([A-Za-z]*?)N.*?(\d+)", mangled)
 		if m:
-			length = int(m.group(1))
+			length = int(m.group(2))
 			start = m.end()
 			file_name = mangled[start:start+length]
-			if re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', file_name):
-				return file_name, ''
-		return 'global', ''
+			if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", file_name):
+				return file_name, ""
+		return "global", ""
 
-	if any(x in demangled for x in ['vtable for', 'VTT for', 'typeinfo']):
-		m = re.search(r'(vtable for|typeinfo for|typeinfo name for|VTT for)\s+(.*)', demangled)
+	if any(x in demangled for x in ["vtable for", "VTT for", "typeinfo"]):
+		m = re.search(r"(vtable for|typeinfo for|typeinfo name for|VTT for)\s+(.*)", demangled)
 		if m:
 			class_str = m.group(2).strip()
 			parts = split_namespace(class_str)
 			if len(parts) > 0:
 				first_part = parts[0]
-				file_name = re.sub(r'[^A-Za-z0-9_~]', '', first_part.split('<')[0])
+				file_name = re.sub(r"[^A-Za-z0-9_~]", "", first_part.split("<")[0])
 				if len(parts) > 1:
-					if '<' in first_part:
-						class_name = '::'.join([first_part] + parts[1:])
+					if "<" in first_part:
+						class_name = "::".join([first_part] + parts[1:])
 					else:
-						class_name = '::'.join(parts[1:])
+						class_name = "::".join(parts[1:])
 				else:
-					class_name = ''
+					class_name = ""
 				return file_name, class_name
-		return 'global', ''
+		return "global", ""
 
 	paren_idx = find_main_paren(demangled)
 	base = demangled[:paren_idx] if paren_idx != -1 else demangled
@@ -85,33 +86,32 @@ def parse_demangled(demangled, mangled):
 
 	if len(parts) > 1:
 		first_part = parts[0]
-		file_name = re.sub(r'[^A-Za-z0-9_~]', '', first_part.split('<')[0])
+		file_name = re.sub(r"[^A-Za-z0-9_~]", "", first_part.split("<")[0])
 
-		if '<' in first_part:
-			class_name = '::'.join([first_part] + parts[1:-1])
+		if "<" in first_part:
+			class_name = "::".join([first_part] + parts[1:-1])
 		else:
-			class_name = '::'.join(parts[1:-1])
+			class_name = "::".join(parts[1:-1])
 		return file_name, class_name
 	else:
-		return 'global', ''
+		return "global", ""
 
-def format_decl(ns_path, demangled, mangled, indent):
+def format_decl(ns_path, demangled, mangled, indent, is_virtual=False):
 	is_secondary = False
-	if re.search(r'(C2|C3|D0|D2)[A-Za-z0-9_]*$', mangled):
+	if re.search(r"(C2|C3|D0|D2)[A-Za-z0-9_]*$", mangled):
 		is_secondary = True
 
-	if any(x in demangled for x in ['guard variable', 'vtable for', 'VTT for', 'typeinfo']):
+	if any(x in demangled for x in ["guard variable", "vtable for", "VTT for", "typeinfo"]):
 		return f"{indent}// {demangled} // {mangled}"
 
-	if '_ZZ' in mangled or '_ZGVZ' in mangled:
+	if "_ZZ" in mangled or "_ZGVZ" in mangled:
 		return f"{indent}// local static: {demangled} // {mangled}"
 
 	decl = demangled
 
 	paren_idx = find_main_paren(decl)
 	if paren_idx == -1:
-
-		field_name = decl.split('::')[-1]
+		field_name = decl.split("::")[-1]
 		decl_str = f"static void* {field_name};"
 		if is_secondary:
 			return f"{indent}// {decl_str} // {mangled}"
@@ -123,11 +123,11 @@ def format_decl(ns_path, demangled, mangled, indent):
 	depth = 0
 	valid_colon_idx = -1
 	for i in range(len(before_paren)-1, 0, -1):
-		if before_paren[i] == '>':
+		if before_paren[i] == ">":
 			depth += 1
-		elif before_paren[i] == '<':
+		elif before_paren[i] == "<":
 			depth -= 1
-		elif depth == 0 and before_paren[i] == ':' and before_paren[i-1] == ':':
+		elif depth == 0 and before_paren[i] == ":" and before_paren[i-1] == ":":
 			valid_colon_idx = i - 1
 			break
 
@@ -135,18 +135,18 @@ def format_decl(ns_path, demangled, mangled, indent):
 		depth = 0
 		space_idx = -1
 		for i in range(valid_colon_idx-1, -1, -1):
-			if before_paren[i] == '>':
+			if before_paren[i] == ">":
 				depth += 1
-			elif before_paren[i] == '<':
+			elif before_paren[i] == "<":
 				depth -= 1
-			elif depth == 0 and before_paren[i] == ' ':
+			elif depth == 0 and before_paren[i] == " ":
 				space_idx = i
 				break
 
-		if space_idx != -1 and 'operator' not in before_paren[space_idx:]:
+		if space_idx != -1 and "operator" not in before_paren[space_idx:]:
 			return_type = before_paren[:space_idx+1]
 		else:
-			return_type = ''
+			return_type = ""
 
 		function_name = before_paren[valid_colon_idx+2:]
 		decl = return_type + function_name + after_paren
@@ -154,18 +154,17 @@ def format_decl(ns_path, demangled, mangled, indent):
 	paren_idx = find_main_paren(decl)
 	before_paren_stripped = decl[:paren_idx].strip() if paren_idx != -1 else decl
 
-	class_basename = ns_path.split('::')[-1] if ns_path else ""
+	class_basename = ns_path.split("::")[-1] if ns_path else ""
 
 	is_constructor = before_paren_stripped == class_basename
-	is_destructor = before_paren_stripped == '~' + class_basename
-	is_operator = 'operator' in before_paren_stripped
-	has_return_type = ' ' in before_paren_stripped or '*' in before_paren_stripped or '&' in before_paren_stripped
+	is_destructor = before_paren_stripped == "~" + class_basename
+	is_operator = "operator" in before_paren_stripped
+	has_return_type = " " in before_paren_stripped or "*" in before_paren_stripped or "&" in before_paren_stripped
 
 	if not is_constructor and not is_destructor and not is_operator and not has_return_type:
-		base_func_name = before_paren_stripped.split('<')[0]
-
-		bool_prefixes = ('is', '_is', 'contains', '_contains', 'includes', '_includes', 'has', '_has', 'can', '_can', 'should', '_should', 'was', '_was')
-		voidptr_prefixes = ('get', '_get')
+		base_func_name = before_paren_stripped.split("<")[0]
+		bool_prefixes = ("is", "_is", "contains", "_contains", "includes", "_includes", "has", "_has", "can", "_can", "should", "_should", "was", "_was")
+		voidptr_prefixes = ("get", "_get")
 
 		if matches_prefix(base_func_name, voidptr_prefixes):
 			decl = "void* " + decl
@@ -173,6 +172,9 @@ def format_decl(ns_path, demangled, mangled, indent):
 			decl = "bool " + decl
 		else:
 			decl = "void " + decl
+
+	if is_virtual:
+		decl = "virtual " + decl
 
 	if not decl.endswith(";"):
 		decl += ";"
@@ -187,14 +189,14 @@ def matches_prefix(name, prefixes):
 			if len(name) == len(p):
 				return True
 			next_char = name[len(p)]
-			if next_char.isupper() or next_char == '_' or next_char.isdigit():
+			if next_char.isupper() or next_char == "_" or next_char.isdigit():
 				return True
 	return False
 
 def get_sort_key(mangled, demangled, class_name):
-	if any(x in demangled for x in ['guard variable', 'vtable for', 'VTT for', 'typeinfo']):
+	if any(x in demangled for x in ["guard variable", "vtable for", "VTT for", "typeinfo"]):
 		return (1, "", "", demangled)
-	if '_ZZ' in mangled or '_ZGVZ' in mangled:
+	if "_ZZ" in mangled or "_ZGVZ" in mangled:
 		return (1, "", "", demangled)
 
 	paren_idx = find_main_paren(demangled)
@@ -203,196 +205,555 @@ def get_sort_key(mangled, demangled, class_name):
 
 	base = strip_return_type(demangled[:paren_idx])
 	parts = split_namespace(base)
-	base_func_name = parts[-1].split('<')[0]
-	class_basename = class_name.split('::')[-1] if class_name else ""
+	base_func_name = parts[-1].split("<")[0]
+	class_basename = class_name.split("::")[-1] if class_name else ""
 
 	if base_func_name == class_basename:
 		return (3, "", "", demangled)
 
-	if base_func_name == '~' + class_basename:
+	if base_func_name == "~" + class_basename:
 		return (4, "", "", demangled)
 
-	bool_prefs = ('is', '_is', 'contains', '_contains', 'includes', '_includes', 'has', '_has', 'can', '_can', 'should', '_should', 'was', '_was')
+	bool_prefs = ("is", "_is", "contains", "_contains", "includes", "_includes", "has", "_has", "can", "_can", "should", "_should", "was", "_was")
 	if matches_prefix(base_func_name, bool_prefs):
 		prop = base_func_name
 		for p in bool_prefs:
 			if base_func_name.startswith(p):
-				prop = base_func_name[len(p):].lstrip('_')
+				prop = base_func_name[len(p):].lstrip("_")
 				break
 		return (5, prop, base_func_name, demangled)
 
-	getset_prefs = ('get', '_get', 'set', '_set')
+	getset_prefs = ("get", "_get", "set", "_set")
 	if matches_prefix(base_func_name, getset_prefs):
 		prop = base_func_name
 		for p in getset_prefs:
 			if base_func_name.startswith(p):
-				prop = base_func_name[len(p):].lstrip('_')
+				prop = base_func_name[len(p):].lstrip("_")
 				break
 		return (6, prop, base_func_name, demangled)
 
-	if base_func_name.startswith('operator'):
+	if base_func_name.startswith("operator"):
 		return (8, base_func_name, base_func_name, demangled)
 
 	return (7, base_func_name, base_func_name, demangled)
 
 def clean_type_names(name):
-	name = name.replace('std::__ndk1::basic_string<char, std::__ndk1::char_traits<char>, std::__ndk1::allocator<char> >', 'stl_string')
-	name = name.replace('std::__ndk1::basic_string<char, std::__ndk1::char_traits<char>, std::__ndk1::allocator<char>>', 'stl_string')
-
-	name = re.sub(r'std::__ndk1::vector<(.*?),\s*std::__ndk1::allocator<\1\s*>\s*>', r'stl_vector<\1>', name)
-	name = re.sub(r'std::__ndk1::unique_ptr<(.*?),\s*std::__ndk1::default_delete<\1\s*>\s*>', r'stl_unique_ptr<\1>', name)
-
-	name = name.replace('std::__ndk1::', 'stl_')
+	name = name.replace("std::__ndk1::basic_string<char, std::__ndk1::char_traits<char>, std::__ndk1::allocator<char> >", "stl_string")
+	name = name.replace("std::__ndk1::basic_string<char, std::__ndk1::char_traits<char>, std::__ndk1::allocator<char>>", "stl_string")
+	name = re.sub(r"std::__ndk1::vector<(.*?),\s*std::__ndk1::allocator<\1\s*>\s*>", r"stl_vector<\1>", name)
+	name = re.sub(r"std::__ndk1::unique_ptr<(.*?),\s*std::__ndk1::default_delete<\1\s*>\s*>", r"stl_unique_ptr<\1>", name)
+	name = name.replace("std::__ndk1::", "stl_")
 	return name
+
+def parse_vtables(filepath):
+	vtables = {}
+	current_vtable = None
+	with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+		for line in f:
+			line = line.strip()
+			if line.startswith("# _ZTV"):
+				current_vtable = line[6:]
+				vtables[current_vtable] = []
+			elif line.startswith("|") and current_vtable:
+				parts = [p.strip() for p in line.split("|")]
+				if len(parts) >= 4 and parts[1].isdigit():
+					idx = int(parts[1])
+					method = parts[2].strip("` ")
+					while len(vtables[current_vtable]) <= idx:
+						vtables[current_vtable].append(None)
+					vtables[current_vtable][idx] = method
+	return vtables
+
+def extract_class_from_mangled(mangled):
+	if not mangled or mangled == "__cxa_pure_virtual": return None
+	if mangled.startswith("_ZNK"): content = mangled[4:]
+	elif mangled.startswith("_ZN"): content = mangled[3:]
+	elif mangled.startswith("_ZTV"): content = mangled[4:]
+	else: return None
+
+	parts = []
+	while content:
+		if content.startswith("D0") or content.startswith("D1") or content.startswith("D2") or content.startswith("C1") or content.startswith("C2"):
+			parts.append(content[:2])
+			break
+		m = re.match(r"^(\d+)", content)
+		if not m: break
+		length = int(m.group(1))
+		part_len = len(m.group(1)) + length
+		part = content[:part_len]
+		parts.append(part)
+		content = content[part_len:]
+
+	if not parts: return None
+	if len(parts) > 1:
+		class_parts = parts[:-1]
+		if len(class_parts) > 1: return "N" + "".join(class_parts) + "E"
+		return class_parts[0]
+	return parts[0]
+
+def resolve_pure_virtuals(vtables, method_index, children_map):
+	resolved = defaultdict(dict)
+	for v1_name, v1_slots in vtables.items():
+		for idx, m1 in enumerate(v1_slots):
+			if m1 == "__cxa_pure_virtual":
+				related_v_counts = defaultdict(int)
+				for i, method_in_v1 in enumerate(v1_slots):
+					if i == idx: continue
+					if not method_in_v1 or method_in_v1 == "__cxa_pure_virtual": continue
+					if "D0Ev" in method_in_v1 or "D2Ev" in method_in_v1: continue
+					for related_v in method_index[i].get(method_in_v1, []):
+						if related_v != v1_name:
+							related_v_counts[related_v] += 1
+				for child_v in children_map.get(v1_name, []):
+					related_v_counts[child_v] += 5
+				candidates = []
+				for related_v, count in related_v_counts.items():
+					if len(vtables[related_v]) > idx:
+						m2 = vtables[related_v][idx]
+						if m2 and m2 != "__cxa_pure_virtual":
+							candidates.append((count, m2))
+				if candidates:
+					candidates.sort(reverse=True, key=lambda x: x[0])
+					resolved[v1_name][idx] = candidates[0][1]
+	return resolved
+
+class ClassData:
+	def __init__(self):
+		self.v_name = None
+		self.parents = []
+		self.heuristic_parents = set()
+		self.slots = []
+		self.syms = []
 
 def main():
 	if len(sys.argv) > 1:
 		arch = sys.argv[1]
-		input_file = f"lib{arch}-symbols.txt"
-		output_dir = f"{arch}-symbols"
+		input_syms = f"lib{arch}-symbols.txt"
+		input_vtables = f"lib{arch}-vtable.md"
+		output_dir = f"{arch}-headers"
 	else:
-		input_file = "minecraftpe.txt"
-		output_dir = "symbols"
+		input_syms = "symbols.txt"
+		input_vtables = "vtable.md"
+		output_dir = "headers"
 
-	if not os.path.exists(input_file):
-		print(f"Error: {input_file} not found.")
+	if not os.path.exists(input_syms):
+		print(f"Error: Symbols file {input_syms!r} not found.")
 		return
 
-	if os.path.exists(output_dir):
-		bak_dir = output_dir + ".bak"
-		if os.path.exists(bak_dir):
+	vtables = {}
+	v_info = {}
+	direct_parents = {}
+	heuristic_links = set()
+	resolved_pures = {}
+	has_vtables = False
+
+	if os.path.exists(input_vtables):
+		print(f"Parsing vtables from {input_vtables!r}...")
+		has_vtables = True
+		vtables = parse_vtables(input_vtables)
+
+		for v_name in list(vtables.keys()):
 			try:
-				shutil.rmtree(bak_dir)
+				dummy_mangled = f"_Z1fP{v_name}"
+				demangled_dummy = cpp_demangle.demangle(dummy_mangled)
+				if demangled_dummy.startswith("f(") and demangled_dummy.endswith("*)"):
+					class_name = demangled_dummy[2:-2]
+				else:
+					class_name = v_name
 			except Exception:
-				pass
-		try:
-			os.rename(output_dir, bak_dir)
-			print(f"Moved existing '{output_dir}' to '{bak_dir}'")
-		except Exception:
-			print(f"Warning: Could not rename '{output_dir}' to '{bak_dir}'. Overwriting in place.")
+				class_name = v_name
 
-	os.makedirs(output_dir, exist_ok=True)
+			class_str = class_name
+			parts = split_namespace(class_str)
+			if len(parts) > 1:
+				file_name = re.sub(r"[^A-Za-z0-9_~]", "", parts[0].split("<")[0])
+				if "<" in parts[0]:
+					class_name = "::".join([parts[0]] + parts[1:])
+				else:
+					class_name = "::".join(parts[1:])
+			else:
+				file_name = re.sub(r"[^A-Za-z0-9_~]", "", class_str.split("<")[0])
+				class_name = ""
 
-	file_map = {}
+			if not file_name: file_name = "global"
+			v_info[v_name] = {"file": file_name, "class": class_name, "full_class": class_str}
+
+		print("Building inheritance tree...")
+		ancestors = defaultdict(set)
+		method_index = defaultdict(lambda: defaultdict(list))
+		for v_name, slots in vtables.items():
+			for idx, m in enumerate(slots):
+				if m and m != "__cxa_pure_virtual":
+					method_index[idx][m].append(v_name)
+				cls = extract_class_from_mangled(m)
+				if cls and cls != v_name:
+					ancestors[v_name].add(cls)
+
+		name_to_v_name = {info["full_class"]: v_name for v_name, info in v_info.items() if info["full_class"]}
+
+		for v_name, slots in vtables.items():
+			if not ancestors.get(v_name):
+				c_name = v_info[v_name]["full_class"]
+				if not c_name: continue
+				best_p_name, best_p_len = None, -1
+				for i in range(len(c_name)):
+					suffix = c_name[i:]
+					if suffix in name_to_v_name and len(suffix) > 3 and suffix != c_name:
+						p_v_name = name_to_v_name[suffix]
+						if len(vtables.get(p_v_name, [])) <= len(slots):
+							if len(suffix) > best_p_len:
+								best_p_len = len(suffix)
+								best_p_name = p_v_name
+				if best_p_name:
+					ancestors[v_name].add(best_p_name)
+					method_index[-1][best_p_name].append(v_name)
+					heuristic_links.add((v_name, best_p_name))
+
+		for cls, ancs in ancestors.items():
+			parents = set(ancs)
+			redundant = set()
+			for p1 in parents:
+				stack = [p1]
+				visited = set()
+				while stack:
+					curr = stack.pop()
+					if curr in visited: continue
+					visited.add(curr)
+					for p in ancestors.get(curr, []):
+						redundant.add(p)
+						stack.append(p)
+			direct_parents[cls] = list(parents - redundant)
+
+		children_map = defaultdict(list)
+		for child_v, parents in direct_parents.items():
+			for p in parents:
+				children_map[p].append(child_v)
+
+		print("Resolving pure virtual methods...")
+		resolved_pures = resolve_pure_virtuals(vtables, method_index, children_map)
+	else:
+		print(f"Warning: VTable dump {input_vtables!r} not found. Generating without virtual modifiers and inheritance.")
+
+	print(f"Reading symbols from {input_syms!r}...")
+	file_map = defaultdict(lambda: defaultdict(ClassData))
 	file_needs_stl = {}
 
-	print(f"Reading symbols from {input_file}...")
-
-	with open(input_file, 'r', encoding='utf-8') as f:
+	with open(input_syms, "r", encoding="utf-8") as f:
 		for line in f:
 			mangled = line.strip()
 			if not mangled: continue
-
 			try:
 				demangled = cpp_demangle.demangle(mangled)
 			except Exception:
 				demangled = mangled
 
 			orig_file_name, _ = parse_demangled(demangled, mangled)
-			if orig_file_name in ('std', '__cxxabiv1', '__gnu_cxx'):
-				continue
+			if orig_file_name in ("std", "__cxxabiv1", "__gnu_cxx"): continue
 
 			demangled = clean_type_names(demangled)
-
 			file_name, class_name = parse_demangled(demangled, mangled)
+			if not file_name: file_name = "global"
 
-			if not file_name:
-				file_name = "global"
+			file_map[file_name][class_name].syms.append((mangled, demangled))
+			if "stl_" in demangled: file_needs_stl[file_name] = True
 
-			if file_name not in file_map:
-				file_map[file_name] = {}
-			if class_name not in file_map[file_name]:
-				file_map[file_name][class_name] = []
+	if has_vtables:
+		for v_name, slots in vtables.items():
+			file_name = v_info[v_name]["file"]
+			class_name = v_info[v_name]["class"]
+			if file_name in ("std", "__cxxabiv1", "__gnu_cxx"): continue
+			if "_ptr" in v_name or re.match(r"^\d", class_name): continue
 
-			file_map[file_name][class_name].append((mangled, demangled))
+			is_valid = False
+			for m in slots:
+				if m and m != "__cxa_pure_virtual" and "D0Ev" not in m and "D2Ev" not in m:
+					if extract_class_from_mangled(m) == v_name:
+						is_valid = True
+						break
+			if not is_valid:
+				parents = direct_parents.get(v_name, [])
+				if not parents:
+					if len(slots) > 2: is_valid = True
+				else:
+					max_p_len = max(len(vtables.get(p, [])) for p in parents)
+					if len(slots) > max_p_len: is_valid = True
 
-			if 'stl_' in demangled:
-				file_needs_stl[file_name] = True
+			if is_valid:
+				cdata = file_map[file_name][class_name]
+				cdata.v_name = v_name
+				cdata.slots = slots
+				cdata.parents = direct_parents.get(v_name, [])
+				for p in cdata.parents:
+					if (v_name, p) in heuristic_links:
+						cdata.heuristic_parents.add(p)
+
+	if os.path.exists(output_dir):
+		bak_dir = output_dir + ".bak"
+		if os.path.exists(bak_dir): shutil.rmtree(bak_dir, ignore_errors=True)
+		try: os.rename(output_dir, bak_dir)
+		except Exception: pass
+	os.makedirs(output_dir, exist_ok=True)
 
 	print(f"Found {len(file_map)} files to generate.")
-	print(f"Generating headers in '{output_dir}'...")
+	print(f"Generating headers in {output_dir!r}...")
+
+	known_classes = set(file_map.keys())
 
 	for file_name, classes in file_map.items():
-		safe_file_name = "".join(c for c in file_name if c.isalnum() or c == '_')
-		if not safe_file_name:
-			safe_file_name = "global"
+		if "anonymous namespace" in file_name or "__func" in file_name or "__cxx" in file_name or "__ndk1" in file_name:
+			continue
+		safe_file_name = "".join(c for c in file_name if c.isalnum() or c == "_")[:64]
+		if not safe_file_name: safe_file_name = "global"
 
 		header_path = os.path.join(output_dir, f"{safe_file_name}.h")
+		includes = set()
 
-		with open(header_path, 'w', encoding='utf-8') as f:
+		forward_declares = set()
+		for class_name, cdata in classes.items():
+			for p in cdata.parents:
+				if p in v_info:
+					p_file = v_info[p]["file"]
+					if p_file != file_name:
+						safe_p_file = "".join(c for c in p_file if c.isalnum() or c == "_")[:64]
+						includes.add(f"{safe_p_file}.h")
+
+			output_slots = []
+			if cdata.slots:
+				v_name = cdata.v_name
+				for idx, mangled in enumerate(cdata.slots):
+					if not mangled: continue
+					if mangled == "__cxa_pure_virtual":
+						if v_name in resolved_pures and idx in resolved_pures[v_name]:
+							output_slots.append(resolved_pures[v_name][idx])
+						continue
+					if "D0Ev" in mangled or "D2Ev" in mangled:
+						output_slots.append(mangled)
+						continue
+					m_class = extract_class_from_mangled(mangled)
+					if m_class == v_name:
+						output_slots.append(mangled)
+
+			for mangled in output_slots:
+				if "D0Ev" in mangled or "D1Ev" in mangled or "D2Ev" in mangled:
+					continue
+				try:
+					dem = cpp_demangle.demangle(mangled)
+					if "std::" in dem or "__ndk1" in dem:
+						file_needs_stl[file_name] = True
+					for match in re.finditer(r"\b(?:[A-Za-z0-9_]+::)*[A-Z][a-zA-Z0-9_]*\b", dem):
+						cls = match.group(0)
+						if cls == file_name or cls == safe_file_name or cls.startswith(safe_file_name + "::") or cls.startswith(file_name + "::"):
+							continue
+						if "::" in cls:
+							parts = cls.split("::")
+							if parts[0] in known_classes:
+								if f"{parts[0]}.h" not in includes and parts[0] != safe_file_name:
+									includes.add(f"{parts[0]}.h")
+							else:
+								decl = ""
+								for p in parts[:-1]: decl += f"namespace {p} {{ "
+								decl += f"class {parts[-1]}; "
+								for p in parts[:-1]: decl += "}"
+								forward_declares.add(decl)
+						else:
+							if f"{cls}.h" not in includes:
+								forward_declares.add(f"class {cls};")
+				except: pass
+
+			for mangled, demangled in cdata.syms:
+				for match in re.finditer(r"\b(?:[A-Za-z0-9_]+::)*[A-Z][a-zA-Z0-9_]*\b", demangled):
+					cls = match.group(0)
+					if cls == file_name or cls == safe_file_name or cls.startswith(safe_file_name + "::") or cls.startswith(file_name + "::"):
+						continue
+					if "::" in cls:
+						parts = cls.split("::")
+						if parts[0] in known_classes:
+							if f"{parts[0]}.h" not in includes and parts[0] != safe_file_name:
+								includes.add(f"{parts[0]}.h")
+						else:
+							decl = ""
+							for p in parts[:-1]: decl += f"namespace {p} {{ "
+							decl += f"class {parts[-1]}; "
+							for p in parts[:-1]: decl += "}"
+							forward_declares.add(decl)
+					else:
+						if f"{cls}.h" not in includes:
+							forward_declares.add(f"class {cls};")
+
+		with open(header_path, "w", encoding="utf-8") as f:
 			f.write("#pragma once\n\n")
+			has_stl = file_needs_stl.get(file_name, False) or file_needs_stl.get(safe_file_name, False)
+			if has_stl: f.write("#include <stl.h>\n")
+			for inc in sorted(list(includes)):
+				f.write(f"#include \"{inc}\"\n")
+			if includes or has_stl: f.write("\n")
 
-			if file_needs_stl.get(file_name, False) or file_needs_stl.get(safe_file_name, False):
-				f.write("#include <stl.h>\n\n")
+			if forward_declares:
+				for decl in sorted(list(forward_declares)):
+					if decl.startswith("namespace") or decl.startswith("class"):
+						f.write(f"{decl}\n")
+					else:
+						f.write(f"class {decl};\n")
+				f.write("\n")
 
 			if safe_file_name == "global":
-				for class_name, syms in classes.items():
-					for mangled, demangled in syms:
+				for class_name, cdata in classes.items():
+					cdata.syms.sort(key=lambda x: get_sort_key(x[0], x[1], ""))
+					for mangled, demangled in cdata.syms:
 						f.write(format_decl("", demangled, mangled, "") + "\n")
 				continue
 
 			has_nested = any(c for c in classes.keys())
-
 			is_class = not has_nested
-			for mangled, demangled in classes.get("", []):
-				if any(x in demangled for x in ['typeinfo', 'vtable', 'VTT']):
-					is_class = True
-					break
+
+			for mangled, demangled in classes.get("", ClassData()).syms:
+				if any(x in demangled for x in ["typeinfo", "vtable", "VTT"]):
+					is_class = True; break
 				category = get_sort_key(mangled, demangled, safe_file_name)[0]
 				if category in (3, 4):
-					is_class = True
-					break
+					is_class = True; break
+
+			if classes.get("", ClassData()).v_name is not None:
+				is_class = True
 
 			if not is_class:
-				f.write(f"namespace {safe_file_name} {{\n\n")
+				f.write(f"namespace {safe_file_name} {{\n")
 				indent = "\t"
 			else:
-				f.write(f"class {safe_file_name} {{\n")
-				f.write("public:\n")
+				cdata = classes.get("", ClassData())
+				inheritance_str = ""
+				if cdata and cdata.parents:
+					parent_names = []
+					for p in cdata.parents:
+						if p in v_info:
+							mark = " /* inaccurate */" if p in cdata.heuristic_parents else ""
+							p_full_class = v_info[p]["full_class"]
+							parent_names.append(f"public {p_full_class}{mark}")
+					if parent_names: inheritance_str = " : " + ", ".join(parent_names)
+				f.write(f"class {safe_file_name}{inheritance_str} {{\npublic:\n")
 				indent = "\t"
 
-			tree = {'__syms__': [], '__sub__': {}}
-			for class_name, syms in classes.items():
+			tree = {"__cdata__": None, "__sub__": {}}
+			for class_name, cdata in classes.items():
 				current = tree
 				if class_name:
 					parts = split_namespace(class_name)
 					for p in parts:
-						if p not in current['__sub__']:
-							current['__sub__'][p] = {'__syms__': [], '__sub__': {}}
-						current = current['__sub__'][p]
-				current['__syms__'].extend(syms)
+						if p not in current["__sub__"]:
+							current["__sub__"][p] = {"__cdata__": None, "__sub__": {}}
+						current = current["__sub__"][p]
+				current["__cdata__"] = cdata
 
-			def write_node(node, current_indent, path_parts):
-				syms = node['__syms__']
+			global_first_class = [True]
 
-				full_ns_path = file_name
-				if path_parts:
-					full_ns_path += "::" + "::".join(path_parts)
+			def write_node(node, current_indent, basename, full_ns_path):
+				cdata = node["__cdata__"]
 
-				syms.sort(key=lambda x: get_sort_key(x[0], x[1], full_ns_path))
+				if basename:
+					inheritance_str = ""
+					if cdata and cdata.parents:
+						parent_names = []
+						for p in cdata.parents:
+							if p in v_info:
+								mark = " /* inaccurate */" if p in cdata.heuristic_parents else ""
+								p_full_class = v_info[p]["full_class"]
+								parent_names.append(f"public {p_full_class}{mark}")
+						if parent_names: inheritance_str = " : " + ", ".join(parent_names)
 
-				for mangled, demangled in syms:
-					decl_str = format_decl(full_ns_path, demangled, mangled, current_indent)
-					f.write(f"{decl_str}\n")
+					if "<" in basename: f.write(f"{'' if global_first_class[0] else chr(10)}{current_indent}template<>\n")
+					else: f.write(f"{'' if global_first_class[0] else chr(10)}")
+					f.write(f"{current_indent}class {basename}{inheritance_str} {{\n{current_indent}public:\n")
+					global_first_class[0] = False
+					inner_indent = current_indent + "\t"
+				else:
+					inner_indent = current_indent
 
-				for sub_name, sub_node in node['__sub__'].items():
-					if '<' in sub_name:
-						f.write(f"\n{current_indent}template<>\n")
-						f.write(f"{current_indent}class {sub_name} {{\n")
-					else:
-						f.write(f"\n{current_indent}class {sub_name} {{\n")
-					f.write(f"{current_indent}public:\n")
-					write_node(sub_node, current_indent + "\t", path_parts + [sub_name])
-					f.write(f"{current_indent}}};\n")
+				if cdata:
+					cdata.syms.sort(key=lambda x: get_sort_key(x[0], x[1], full_ns_path))
+					emitted_virtual_mangled = set()
+					virtual_lines = []
+					destructors_emitted = False
 
-			write_node(tree, indent, [])
+					if cdata.v_name:
+						v_name = cdata.v_name
+						class_name = v_info[v_name]["class"]
+						for idx, mangled in enumerate(cdata.slots):
+							if not mangled: continue
+							if "D0Ev" in mangled or "D2Ev" in mangled:
+								emitted_virtual_mangled.add(mangled)
+								if not destructors_emitted:
+									virtual_lines.append(f"{inner_indent}virtual ~{basename if basename else safe_file_name}(); // slot {idx}: {mangled}")
+									destructors_emitted = True
+								continue
+							if mangled == "__cxa_pure_virtual":
+								if idx in resolved_pures.get(v_name, {}):
+									best_m2 = resolved_pures[v_name][idx]
+									try:
+										dem = cpp_demangle.demangle(best_m2)
+										dem = clean_type_names(dem)
+										decl = format_decl(class_name, dem, best_m2, "", is_virtual=True)
+										idx_comment = decl.find("//")
+										before_comment = decl[:idx_comment].rstrip() if idx_comment != -1 else decl.rstrip()
+										if before_comment.endswith(";"): before_comment = before_comment[:-1] + " = 0;"
+										if not before_comment.endswith(";"): before_comment += ";"
+										virtual_lines.append(f"{inner_indent}{before_comment.strip()} // slot {idx}: {best_m2}")
+									except:
+										virtual_lines.append(f"{inner_indent}virtual void unk_vtable_slot_{idx}() = 0; // slot {idx}: __cxa_pure_virtual")
+								else:
+									virtual_lines.append(f"{inner_indent}virtual void unk_vtable_slot_{idx}() = 0; // slot {idx}: __cxa_pure_virtual")
+								continue
 
-			if not is_class:
-				f.write("}\n")
-			else:
-				f.write("};\n")
+							m_class = extract_class_from_mangled(mangled)
+							if m_class == v_name:
+								emitted_virtual_mangled.add(mangled)
+								try:
+									dem = cpp_demangle.demangle(mangled)
+									dem = clean_type_names(dem)
+									decl = format_decl(class_name, dem, mangled, "", is_virtual=True)
+									idx_comment = decl.find("//")
+									before_comment = decl[:idx_comment].rstrip() if idx_comment != -1 else decl.rstrip()
+									if not before_comment.endswith(";"): before_comment += ";"
+									virtual_lines.append(f"{inner_indent}{before_comment.strip()} // slot {idx}: {mangled}")
+								except:
+									virtual_lines.append(f"{inner_indent}// virtual parse_error // slot {idx}: {mangled}")
+
+					fields_lines = []
+					method_lines = []
+					for mangled, demangled in cdata.syms:
+						if mangled in emitted_virtual_mangled: continue
+
+						if "D0Ev" in mangled or "D2Ev" in mangled or ("~" in demangled and "::~" in demangled):
+							if destructors_emitted: continue
+							destructors_emitted = True
+
+						paren_idx = find_main_paren(demangled)
+						decl_str = format_decl(full_ns_path, demangled, mangled, inner_indent)
+
+						if paren_idx == -1 and "guard variable" not in demangled and "_ZZ" not in mangled and "_ZGVZ" not in mangled:
+							fields_lines.append(decl_str)
+						else:
+							method_lines.append(decl_str)
+
+					for line in fields_lines: f.write(f"{line}\n")
+					if fields_lines and (virtual_lines or method_lines): f.write("\n")
+
+					for line in virtual_lines: f.write(f"{line}\n")
+					if virtual_lines and method_lines: f.write("\n")
+
+					for line in method_lines: f.write(f"{line}\n")
+
+				for sub_name, sub_node in node["__sub__"].items():
+					next_ns = full_ns_path + "::" + sub_name if full_ns_path else sub_name
+					write_node(sub_node, inner_indent, sub_name, next_ns)
+
+				if basename: f.write(f"{current_indent}}};\n")
+
+			write_node(tree, indent, "", file_name)
+
+			if not is_class: f.write("}\n")
+			else: f.write("};\n")
 
 	print("Header generation completed.")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
 	main()
