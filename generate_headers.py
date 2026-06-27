@@ -2,12 +2,16 @@ import os
 import re
 import shutil
 import sys
+import json
+import glob
 from collections import defaultdict
+
+CONSTANT_METHODS = {}
 
 try:
 	import cpp_demangle
 except ImportError:
-	print("Error: cpp_demangle package not found. Please install it using 'pip install cpp_demangle'")
+	print("Error: cpp_demangle package not found. Please install it using \"pip install cpp_demangle\"")
 	exit(1)
 
 def find_main_paren(s):
@@ -26,8 +30,9 @@ def split_namespace(s):
 	s_clean = re.sub(r"operator\s*(<=>|<<|>>|<=|>=|->|<|>)", "operator_HIDDEN", s)
 	i = 0
 	while i < len(s):
-		if s_clean[i] == "<": depth += 1
-		elif s_clean[i] == ">": depth -= 1
+		c = s_clean[i]
+		if c in "<([{": depth += 1
+		elif c in ">)]}": depth -= 1
 		elif depth == 0 and s[i] == ":" and i+1 < len(s) and s[i+1] == ":":
 			parts.append(s[last_idx:i])
 			last_idx = i + 2
@@ -52,13 +57,32 @@ def strip_return_type(s):
 def parse_demangled(demangled, mangled):
 	if "_ZZ" in mangled or "_ZGVZ" in mangled:
 		m = re.search(r"^_([A-Za-z]*?)N.*?(\d+)", mangled)
+		file_name = "global"
 		if m:
 			length = int(m.group(2))
 			start = m.end()
-			file_name = mangled[start:start+length]
-			if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", file_name):
-				return file_name, ""
-		return "global", ""
+			extracted = mangled[start:start+length]
+			if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", extracted):
+				file_name = extracted
+
+		paren_idx = find_main_paren(demangled)
+		base = demangled[:paren_idx] if paren_idx != -1 else demangled
+		base = strip_return_type(base)
+		parts = split_namespace(base)
+
+		valid_parts = []
+		for p in parts[:-1]:
+			if "(" in p or "{" in p: break
+			valid_parts.append(p)
+
+		class_name = ""
+		if len(valid_parts) > 0:
+			if valid_parts[0] == file_name:
+				class_name = "::".join(valid_parts[1:])
+			else:
+				class_name = "::".join(valid_parts)
+
+		return file_name, class_name
 
 	if any(x in demangled for x in ["vtable for", "VTT for", "typeinfo"]):
 		m = re.search(r"(vtable for|typeinfo for|typeinfo name for|VTT for)\s+(.*)", demangled)
@@ -97,6 +121,8 @@ def parse_demangled(demangled, mangled):
 		return "global", ""
 
 def format_decl(ns_path, demangled, mangled, indent, is_virtual=False):
+	format_decl.override_type = None
+	format_decl.last_const_val = None
 	is_secondary = False
 	if re.search(r"(C2|C3|D0|D2)[A-Za-z0-9_]*$", mangled):
 		is_secondary = True
@@ -105,7 +131,10 @@ def format_decl(ns_path, demangled, mangled, indent, is_virtual=False):
 		return f"{indent}// {demangled} // {mangled}"
 
 	if "_ZZ" in mangled or "_ZGVZ" in mangled:
-		return f"{indent}// local static: {demangled} // {mangled}"
+		display_name = demangled
+		if ns_path and display_name.startswith(ns_path + "::"):
+			display_name = display_name[len(ns_path)+2:]
+		return f"{indent}// local static {display_name}; // {mangled}"
 
 	decl = demangled
 
@@ -122,10 +151,11 @@ def format_decl(ns_path, demangled, mangled, indent, is_virtual=False):
 
 	depth = 0
 	valid_colon_idx = -1
+	s_clean = re.sub(r"operator\s*(<=>|<<|>>|<=|>=|->|<|>)", "operator_HIDDEN", before_paren)
 	for i in range(len(before_paren)-1, 0, -1):
-		if before_paren[i] == ">":
+		if s_clean[i] == ">":
 			depth += 1
-		elif before_paren[i] == "<":
+		elif s_clean[i] == "<":
 			depth -= 1
 		elif depth == 0 and before_paren[i] == ":" and before_paren[i-1] == ":":
 			valid_colon_idx = i - 1
@@ -135,9 +165,9 @@ def format_decl(ns_path, demangled, mangled, indent, is_virtual=False):
 		depth = 0
 		space_idx = -1
 		for i in range(valid_colon_idx-1, -1, -1):
-			if before_paren[i] == ">":
+			if s_clean[i] == ">":
 				depth += 1
-			elif before_paren[i] == "<":
+			elif s_clean[i] == "<":
 				depth -= 1
 			elif depth == 0 and before_paren[i] == " ":
 				space_idx = i
@@ -151,6 +181,34 @@ def format_decl(ns_path, demangled, mangled, indent, is_virtual=False):
 		function_name = before_paren[valid_colon_idx+2:]
 		decl = return_type + function_name + after_paren
 
+		actual_full_func = function_name
+		if valid_colon_idx != -1:
+			last_space = before_paren.rfind(" ", 0, valid_colon_idx)
+			actual_full_func = before_paren[last_space+1:] if last_space != -1 else before_paren
+
+		full_func = actual_full_func
+		if full_func not in CONSTANT_METHODS:
+			full_func = f"{ns_path}::{function_name}"
+
+		if full_func in CONSTANT_METHODS:
+			const_val = CONSTANT_METHODS[full_func]
+			bool_prefixes = ("is", "_is", "contains", "_contains", "includes", "_includes", "has", "_has", "can", "_can", "should", "_should", "was", "_was")
+			func_base = actual_full_func.split("::")[-1]
+			is_bool = "bool" in return_type or func_base.startswith(bool_prefixes) or const_val in ("0", "1")
+
+			if is_bool:
+				const_val = "true" if const_val != "0" else "false"
+				format_decl.override_type = "bool"
+			elif "*" in return_type and const_val == "0":
+				const_val = "nullptr"
+			elif const_val == "0" and func_base.startswith(("get", "_get")) and not return_type:
+				const_val = "nullptr"
+				format_decl.override_type = "void*"
+			else:
+				format_decl.override_type = "int"
+
+			format_decl.last_const_val = const_val
+
 	paren_idx = find_main_paren(decl)
 	before_paren_stripped = decl[:paren_idx].strip() if paren_idx != -1 else decl
 
@@ -161,22 +219,30 @@ def format_decl(ns_path, demangled, mangled, indent, is_virtual=False):
 	is_operator = "operator" in before_paren_stripped
 	has_return_type = " " in before_paren_stripped or "*" in before_paren_stripped or "&" in before_paren_stripped
 
-	if not is_constructor and not is_destructor and not is_operator and not has_return_type:
+	if not is_constructor and not is_destructor and not has_return_type:
 		base_func_name = before_paren_stripped.split("<")[0]
 		bool_prefixes = ("is", "_is", "contains", "_contains", "includes", "_includes", "has", "_has", "can", "_can", "should", "_should", "was", "_was")
 		voidptr_prefixes = ("get", "_get")
 
-		if matches_prefix(base_func_name, voidptr_prefixes):
+		if getattr(format_decl, "override_type", None):
+			decl = format_decl.override_type + " " + decl
+		elif is_operator:
+			if any(op in before_paren_stripped for op in ["operator==", "operator<", "operator>", "operator<=", "operator>=", "operator!="]):
+				decl = "bool " + decl
+		elif matches_prefix(base_func_name, voidptr_prefixes):
 			decl = "void* " + decl
 		elif matches_prefix(base_func_name, bool_prefixes):
 			decl = "bool " + decl
 		else:
 			decl = "void " + decl
+	elif getattr(format_decl, "override_type", None) and has_return_type:
+		if return_type.strip() in ("void", "void*"):
+			decl = format_decl.override_type + decl[len(return_type):]
 
 	if is_virtual:
 		decl = "virtual " + decl
 
-	if not decl.endswith(";"):
+	if not decl.endswith(";") and not decl.endswith("}"):
 		decl += ";"
 
 	if is_secondary:
@@ -192,6 +258,48 @@ def matches_prefix(name, prefixes):
 			if next_char.isupper() or next_char == "_" or next_char.isdigit():
 				return True
 	return False
+
+def load_constants(arch):
+	if not arch:
+		return {}
+
+	const_file = f"lib{arch}-constants.json"
+	if os.path.exists(const_file):
+		with open(const_file, "r", encoding="utf-8") as f:
+			return json.load(f)
+
+	source_dir = arch
+	if not os.path.exists(source_dir):
+		print(f"Warning: Source directory {source_dir!r} not found. Constants will not be extracted.")
+		return {}
+
+	print(f"Extracting constants from {source_dir!r}...")
+	constants = {}
+	pattern = re.compile(
+		r"^[a-zA-Z0-9_ *&]+?\s+__(?:fastcall|cdecl|stdcall)\s+([a-zA-Z0-9_:]+(?:<[^>]+>)?)\s*\([^)]*\)\n"
+		r"\{\n"
+		r"\s*return\s+([-+]?[0-9]*\.?[0-9]+|0x[0-9a-fA-F]+(?:LL|L|U|ULL)?|true|false|nullptr|NULL);\n"
+		r"\}",
+		re.MULTILINE
+	)
+
+	c_files = glob.glob(os.path.join(source_dir, "*.c"))
+	for c_file in c_files:
+		with open(c_file, "r", encoding="utf-8", errors="ignore") as f:
+			for match in pattern.finditer(f.read()):
+				full_name = match.group(1)
+				val = match.group(2)
+				if full_name in constants and constants[full_name] != val:
+					constants[full_name] = None
+				else:
+					constants[full_name] = val
+
+	final_constants = {k: v for k, v in constants.items() if v is not None}
+	with open(const_file, "w", encoding="utf-8") as f:
+		json.dump(final_constants, f, indent=2)
+	return final_constants
+
+
 
 def get_sort_key(mangled, demangled, class_name):
 	if any(x in demangled for x in ["guard variable", "vtable for", "VTT for", "typeinfo"]):
@@ -324,17 +432,25 @@ class ClassData:
 		self.heuristic_parents = set()
 		self.slots = []
 		self.syms = []
+		self.is_dummy_enum = False
 
-def main():
+def generate_headers():
+	global CONSTANT_METHODS
+
 	if len(sys.argv) > 1:
 		arch = sys.argv[1]
 		input_syms = f"lib{arch}-symbols.txt"
 		input_vtables = f"lib{arch}-vtable.md"
 		output_dir = f"{arch}-headers"
 	else:
+		arch = ""
 		input_syms = "symbols.txt"
 		input_vtables = "vtable.md"
 		output_dir = "headers"
+
+	CONSTANT_METHODS = load_constants(arch)
+	if CONSTANT_METHODS:
+		print(f"Loaded {len(CONSTANT_METHODS)} constants.")
 
 	if not os.path.exists(input_syms):
 		print(f"Error: Symbols file {input_syms!r} not found.")
@@ -497,6 +613,28 @@ def main():
 	os.makedirs(output_dir, exist_ok=True)
 
 	print(f"Found {len(file_map)} files to generate.")
+
+	for file_name, classes in list(file_map.items()):
+		for class_name, cdata in list(classes.items()):
+			known_last_parts = set()
+			for m, d in cdata.syms:
+				parts_d = d.split("::")
+				if parts_d:
+					known_last_parts.add(parts_d[-1])
+			for mangled, demangled in cdata.syms:
+				for match in re.finditer(r"\b(?:[A-Za-z0-9_]+::)+[A-Z][a-zA-Z0-9_]*\b", demangled):
+					if match.end() < len(demangled) and demangled[match.end()] == "(": continue
+					cls = match.group(0)
+					parts = cls.split("::")
+					last_part = parts[-1] if parts else cls
+
+					if last_part in known_last_parts: continue
+					if len(parts) >= 2 and parts[-1] == parts[-2]: continue
+					if parts[0] in file_map:
+						rel_cls = "::".join(parts[1:])
+						if rel_cls and rel_cls not in file_map[parts[0]]:
+							file_map[parts[0]][rel_cls].is_dummy_enum = True
+
 	print(f"Generating headers in {output_dir!r}...")
 
 	known_classes = set(file_map.keys())
@@ -602,7 +740,10 @@ def main():
 				for class_name, cdata in classes.items():
 					cdata.syms.sort(key=lambda x: get_sort_key(x[0], x[1], ""))
 					for mangled, demangled in cdata.syms:
-						f.write(format_decl("", demangled, mangled, "") + "\n")
+						f_decl_str = format_decl("", demangled, mangled, "")
+						if getattr(format_decl, "last_const_val", None):
+							f_decl_str += f" = {format_decl.last_const_val}"
+						f.write(f_decl_str + "\n")
 				continue
 
 			has_nested = any(c for c in classes.keys())
@@ -646,12 +787,16 @@ def main():
 						current = current["__sub__"][p]
 				current["__cdata__"] = cdata
 
-			global_first_class = [True]
+
 
 			def write_node(node, current_indent, basename, full_ns_path):
 				cdata = node["__cdata__"]
 
 				if basename:
+					if cdata and getattr(cdata, "is_dummy_enum", False):
+						f.write(f"{current_indent}enum class {basename} : int;\n")
+						return
+
 					inheritance_str = ""
 					if cdata and cdata.parents:
 						parent_names = []
@@ -662,14 +807,13 @@ def main():
 								parent_names.append(f"public {p_full_class}{mark}")
 						if parent_names: inheritance_str = " : " + ", ".join(parent_names)
 
-					if "<" in basename: f.write(f"{'' if global_first_class[0] else chr(10)}{current_indent}template<>\n")
-					else: f.write(f"{'' if global_first_class[0] else chr(10)}")
+					if "<" in basename: f.write(f"{current_indent}template<>\n")
 					f.write(f"{current_indent}class {basename}{inheritance_str} {{\n{current_indent}public:\n")
-					global_first_class[0] = False
 					inner_indent = current_indent + "\t"
 				else:
 					inner_indent = current_indent
 
+				has_content = False
 				if cdata:
 					cdata.syms.sort(key=lambda x: get_sort_key(x[0], x[1], full_ns_path))
 					emitted_virtual_mangled = set()
@@ -696,9 +840,10 @@ def main():
 										decl = format_decl(class_name, dem, best_m2, "", is_virtual=True)
 										idx_comment = decl.find("//")
 										before_comment = decl[:idx_comment].rstrip() if idx_comment != -1 else decl.rstrip()
-										if before_comment.endswith(";"): before_comment = before_comment[:-1] + " = 0;"
-										if not before_comment.endswith(";"): before_comment += ";"
-										virtual_lines.append(f"{inner_indent}{before_comment.strip()} // slot {idx}: {best_m2}")
+										if before_comment.endswith(";") and not before_comment.endswith("};"): before_comment = before_comment[:-1] + " = 0;"
+										if not before_comment.endswith(";") and not before_comment.endswith("}"): before_comment += ";"
+										const_str = f" = {format_decl.last_const_val}" if getattr(format_decl, "last_const_val", None) else ""
+										virtual_lines.append(f"{inner_indent}{before_comment.strip()} // slot {idx}: {best_m2}{const_str}")
 									except:
 										virtual_lines.append(f"{inner_indent}virtual void unk_vtable_slot_{idx}() = 0; // slot {idx}: __cxa_pure_virtual")
 								else:
@@ -714,8 +859,9 @@ def main():
 									decl = format_decl(class_name, dem, mangled, "", is_virtual=True)
 									idx_comment = decl.find("//")
 									before_comment = decl[:idx_comment].rstrip() if idx_comment != -1 else decl.rstrip()
-									if not before_comment.endswith(";"): before_comment += ";"
-									virtual_lines.append(f"{inner_indent}{before_comment.strip()} // slot {idx}: {mangled}")
+									if not before_comment.endswith(";") and not before_comment.endswith("}"): before_comment += ";"
+									const_str = f" = {format_decl.last_const_val}" if getattr(format_decl, "last_const_val", None) else ""
+									virtual_lines.append(f"{inner_indent}{before_comment.strip()} // slot {idx}: {mangled}{const_str}")
 								except:
 									virtual_lines.append(f"{inner_indent}// virtual parse_error // slot {idx}: {mangled}")
 
@@ -730,6 +876,8 @@ def main():
 
 						paren_idx = find_main_paren(demangled)
 						decl_str = format_decl(full_ns_path, demangled, mangled, inner_indent)
+						if getattr(format_decl, "last_const_val", None):
+							decl_str += f" = {format_decl.last_const_val}"
 
 						if paren_idx == -1 and "guard variable" not in demangled and "_ZZ" not in mangled and "_ZGVZ" not in mangled:
 							fields_lines.append(decl_str)
@@ -744,8 +892,14 @@ def main():
 
 					for line in method_lines: f.write(f"{line}\n")
 
+					has_content = bool(fields_lines or virtual_lines or method_lines)
+
+				first_sub = True
 				for sub_name, sub_node in node["__sub__"].items():
 					next_ns = full_ns_path + "::" + sub_name if full_ns_path else sub_name
+					need_sep = not first_sub or (first_sub and has_content)
+					if need_sep: f.write("\n")
+					first_sub = False
 					write_node(sub_node, inner_indent, sub_name, next_ns)
 
 				if basename: f.write(f"{current_indent}}};\n")
@@ -758,4 +912,4 @@ def main():
 	print("Header generation completed.")
 
 if __name__ == "__main__":
-	main()
+	generate_headers()
