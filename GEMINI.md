@@ -4,10 +4,8 @@ This workspace contains reverse-engineered code for Minecraft: Bedrock Edition 1
 **Our C++ mod code must be placed in the `modules/` directory.**
 
 ## 📂 Architecture
-- `mcpe16-arm32/` and `mcpe16-arm64/`: IDA pseudo-code, split by classes.
-- `symbols/`: `.h` header files. Contain demangled signatures and mangled symbols **only for ARM32**.
-- `mcpe16-vtable.md`: Virtual method table (vtable) offsets.
-- `libmcpe16-arm64-symbols.txt`: Massive dump where mangled symbols **exclusively for ARM64** are stored.
+- `mcpe16-arm32/` and `mcpe16-arm64/`: IDA pseudo-code, split by classes. Very useful for tracing engine logic and call hierarchies.
+- `mcpe16-arm64-headers/`: Auto-generated C++ headers containing complete class structures, virtual method slots, and mangled symbols. This is the primary source of truth for ARM64 types and definitions.
 - `mcpe16-init-timings.txt`: Initialization timings.
 
 ## 📄 Specific Files
@@ -16,7 +14,7 @@ This workspace contains reverse-engineered code for Minecraft: Bedrock Edition 1
 
 ## 🏗️ Core Engine Instances
 - **`MinecraftGame`**: The massive central engine state machine. It orchestrates all global initialization steps and the main update loop.
-- **`ClientInstance`**: Encapsulates the local player's game state, UI (Hummingbird/Gameface), and rendering context. Easily retrieved globally via `GlobalContext::getMinecraftClient()` (requires `#include <innercore/global_context.h>`).
+- **`ClientInstance`**: Encapsulates the local player's game state, UI (Hummingbird/Gameface), and rendering context. Easily retrieved globally via `GlobalContext::getMinecraftClient()` (requires `#include <innercore/global_context.h>`, see `stdincludes/horizon/innercore/global_context.h` for global instances).
   * **Tip**: Other core instances (`Minecraft`, `Level`, `LocalPlayer`, `AppPlatform`) are also available through the `GlobalContext` namespace in Inner Core's API.
 
 ## 🚫 Files to Ignore
@@ -31,3 +29,6 @@ Strictly ignore databases (`.idb`, `.i64`), massive monolithic code dumps (`.so.
 - **C++ Standards**: 
   - `arm32`: C++11
   - `arm64`: C++17. Macro for check: `#if defined(ARM64) || defined(_M_ARM64) || defined(__aarch64__)`.
+
+## 🛠️ Tool Usage
+- **Reading files**: Do NOT use `cat` in PowerShell to read files (especially multiple files like `cat file1 file2`, which causes parameter binding errors). ALWAYS use the specific `view_file` tool for reading and `grep_search` for searching.

@@ -32,9 +32,12 @@ bool useNewAi() const;                      // _ZNK6Zombie8useNewAiEv = true
 | Goal | Flags |
 |------|-------|
 | Observe only | `HookManager::LISTENER \| HookManager::CALL` |
-| Intercept and replace | `HookManager::CONTROLLER \| HookManager::CALL \| HookManager::LISTENER \| HookManager::RESULT` |
+| Intercept and return simple value | `HookManager::REPLACE \| HookManager::CALL` (+ `\| HookManager::RESULT` if not void) |
+| Intercept conditionally / call original manually | `HookManager::CONTROLLER \| HookManager::CALL \| HookManager::LISTENER` (+ `\| HookManager::RESULT` if not void) |
 
-> **IMPORTANT**: Add `HookManager::CallbackController* controller` to the lambda ONLY when the `CONTROLLER` flag is passed! Without it, arguments shift and you get a crash.
+> **IMPORTANT**:
+> - Add `HookManager::CallbackController* controller` to the lambda **ONLY** when the `CONTROLLER` flag is passed!
+> - Add `HookManager::RESULT` to the flags **ONLY** if your lambda actually returns a value (otherwise the engine ignores your return).
 
 ## Step 3 — Write the Hook
 
@@ -42,21 +45,34 @@ bool useNewAi() const;                      // _ZNK6Zombie8useNewAiEv = true
 #include <hook.h>
 #include <innercore/global_context.h>
 
-// Simple listener:
+// Simple listener (Observe):
 HookManager::addCallback(
 	SYMBOL("mcpe", "_ZN6Zombie3dieERK17ActorDamageSource"),
-	LAMBDA((Zombie* self, ActorDamageSource const& src) {
+	LAMBDA((Zombie* zombie, ActorDamageSource const& src), {
 		// your code
 	},),
-	HookManager::LISTENER | HookManager::CALL
+	HookManager::LISTENER | HookManager::CALL // RETURN to call hook AFTER original (unpreventable)
 );
 
-// With result interception (CONTROLLER):
+// Simple replacement (REPLACE) - NO controller argument needed:
 HookManager::addCallback(
 	SYMBOL("mcpe", "_ZNK6Zombie8useNewAiEv"),
-	LAMBDA((HookManager::CallbackController* controller, Zombie* self) {
-		controller->replace();
+	LAMBDA((Zombie* zombie), {
 		return true; // override return value
+	},),
+	HookManager::REPLACE | HookManager::CALL | HookManager::RESULT
+);
+
+// Conditional interception / manual original call (CONTROLLER):
+HookManager::addCallback(
+	SYMBOL("mcpe", "_ZNK6Zombie8useNewAiEv"),
+	LAMBDA((HookManager::CallbackController* controller, Zombie* zombie), {
+		if (someCondition) {
+			controller->replace();
+			return true;
+		}
+		// otherwise, do nothing and let the original run
+		return false; // return value ignored if not replaced
 	},),
 	HookManager::CONTROLLER | HookManager::CALL | HookManager::LISTENER | HookManager::RESULT
 );
