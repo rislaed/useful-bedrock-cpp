@@ -22,12 +22,6 @@ This workspace contains reverse-engineered code for Minecraft: Bedrock Edition 1
 ## 🚫 Files to Ignore
 Strictly ignore databases (`.idb`, `.i64`), massive monolithic code dumps (`.so.c`), scripts (`ida_dumper.py`), and Java sources. They are not used.
 
-## 🛠️ Workflows
-Depending on the objective, the workflow varies. We primarily work with symbols, but different tasks require different approaches:
-- **Analyzing and Debugging**: Trace function calls and logic through `mcpe16-arm32/` or `mcpe16-arm64/` (and `__sub__.c` for globals) to find bugs or understand engine behavior.
-- **Hooking and Memory Patching**: Find the target mangled symbol (starts with `_Z`). For ARM32 use `symbols/`, for ARM64 use `libmcpe16-arm64-symbols.txt`. If it's a virtual function, get its offset from `mcpe16-vtable.md`. Write the C++ hook using `HookManager::addCallback` and `LAMBDA` in `modules/`. Example: `HookManager::addCallback(SYMBOL("mcpe", "_Z..."), LAMBDA((void* self) { ... }, ), HookManager::LISTENER | HookManager::CALL);`
-- **Reversing and Restoring Structures**: Do **not** recreate C++ classes with raw paddings (like `char pad[123]`) to avoid arm32/arm64 alignment crashes. Instead, use the Data-Driven approach via `generic/offsets_macro.h` to safely access fields. Example: `HZ_DECL_OFFSETS_FOR(MyStruct) { HZ_DECL_OFFSET(0x04, myField); HZ_DECL_SIZE(120); };`. Always declare proper C++ classes and structures instead of working with raw memory (`void*`).
-
 ## ⚙️ Inner Core / Horizon C++ API
 - **Includes**: Headers are searched in `stdincludes/`. Write paths without roots: `#include <hook.h>`, `#include <innercore/global_context.h>`.
 - **STL / Standard Library**: Always `#include <stl.h>` for standard library needs and use its provided structures (e.g., `stl_string`).
@@ -37,13 +31,3 @@ Depending on the objective, the workflow varies. We primarily work with symbols,
 - **C++ Standards**: 
   - `arm32`: C++11
   - `arm64`: C++17. Macro for check: `#if defined(ARM64) || defined(_M_ARM64) || defined(__aarch64__)`.
-
-- **Hooks (`#include <hook.h>`)**: 
-  - The `HookManager::CallbackController* controller` argument must **ONLY** be added to your lambda if the `HookManager::CONTROLLER` flag is passed! 
-  - If you use default flags (`HookManager::LISTENER | HookManager::CALL`), your lambda arguments must exactly match the target function arguments. Adding `controller` without the flag shifts arguments and causes crashes.
-  - **CONTROLLER & RESULT**: When using `HookManager::CONTROLLER` to intercept/modify execution:
-    - Use `HookManager::CONTROLLER | HookManager::CALL | HookManager::LISTENER | HookManager::RESULT`.
-    - `CALL` runs *before* the target. If the condition isn't met, do **not** call `controller->call()`. The engine will naturally call the original function.
-    - If you want to prevent/replace it, use `controller->replace()` and return the result from the lambda.
-    - There is no hidden `result` pointer passed as an argument in AAPCS for `unique_ptr` when using HookManager! The return value is just the return type of `controller->call<ReturnType>(args...)` and the lambda itself.
-  - **Lambdas**: Write most hook logic directly inside the `LAMBDA` instead of extracting it to separate functions, avoiding return type issues.
