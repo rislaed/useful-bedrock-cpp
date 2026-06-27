@@ -386,8 +386,10 @@ def main():
 				if m and m != "__cxa_pure_virtual":
 					method_index[idx][m].append(v_name)
 				cls = extract_class_from_mangled(m)
-				if cls and cls != v_name:
-					ancestors[v_name].add(cls)
+				is_dtor = m and ("D0" in m or "D1" in m or "D2" in m)
+				if cls and cls != v_name and not is_dtor:
+					if len(vtables.get(cls, [])) <= len(slots):
+						ancestors[v_name].add(cls)
 
 		name_to_v_name = {info["full_class"]: v_name for v_name, info in v_info.items() if info["full_class"]}
 
